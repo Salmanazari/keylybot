@@ -341,7 +341,18 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-// Start server
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-}); 
+// Start server with port fallback
+const startServer = (portToTry) => {
+  app.listen(portToTry, () => {
+    console.log(`Server is running on port ${portToTry}`);
+  }).on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`Port ${portToTry} is busy, trying ${portToTry + 1}`);
+      startServer(portToTry + 1);
+    } else {
+      console.error('Server error:', err);
+    }
+  });
+};
+
+startServer(port); 
