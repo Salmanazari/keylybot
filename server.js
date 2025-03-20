@@ -22,7 +22,9 @@ const requiredEnvVars = [
   'OPENAI_API_KEY',
   'CLOUDINARY_CLOUD_NAME',
   'CLOUDINARY_API_KEY',
-  'CLOUDINARY_API_SECRET'
+  'CLOUDINARY_API_SECRET',
+  'AIRTABLE_API_KEY',
+  'AIRTABLE_BASE_ID'
 ];
 
 // Load environment variables from .env file if it exists

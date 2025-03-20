@@ -3,12 +3,21 @@ const Airtable = require('airtable');
 
 // Validate required environment variables
 if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
-  throw new Error('Missing required environment variables: AIRTABLE_API_KEY or AIRTABLE_BASE_ID');
+  console.error('❌ Missing required Airtable environment variables:');
+  if (!process.env.AIRTABLE_API_KEY) console.error('   - AIRTABLE_API_KEY');
+  if (!process.env.AIRTABLE_BASE_ID) console.error('   - AIRTABLE_BASE_ID');
+  throw new Error('Missing required Airtable environment variables');
 }
 
 // Configure Airtable with retries
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
+
+console.log('Initializing Airtable with:', {
+  baseId: process.env.AIRTABLE_BASE_ID,
+  hasApiKey: !!process.env.AIRTABLE_API_KEY,
+  timestamp: new Date().toISOString()
+});
 
 const base = new Airtable({ 
     apiKey: process.env.AIRTABLE_API_KEY
@@ -19,6 +28,25 @@ const TABLES = {
     PROPERTIES: 'Properties',
     SESSIONS: 'User Sessions'
 };
+
+// Verify tables exist
+async function verifyTables() {
+    try {
+        console.log('Verifying Airtable tables...');
+        await base(TABLES.PROPERTIES).select({ maxRecords: 1 }).firstPage();
+        await base(TABLES.SESSIONS).select({ maxRecords: 1 }).firstPage();
+        console.log('✅ Airtable tables verified successfully');
+    } catch (error) {
+        console.error('❌ Error verifying Airtable tables:', error);
+        throw new Error('Failed to verify Airtable tables. Please ensure the tables exist and are properly configured.');
+    }
+}
+
+// Verify tables on startup
+verifyTables().catch(error => {
+    console.error('❌ Airtable verification failed:', error);
+    process.exit(1);
+});
 
 // Retry function
 async function withRetry(fn, maxRetries = MAX_RETRIES) {
