@@ -64,20 +64,33 @@ const upload = multer({
 // Trust proxy for rate limiting
 app.set('trust proxy', 1);
 
+// Configure express timeouts and limits
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+
+// Add timeout middleware
+const timeout = require('connect-timeout');
+app.use(timeout('30s'));
+app.use((req, res, next) => {
+  if (!req.timedout) next();
+});
+
 // Configure rate limiter
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100, // Limit each IP to 100 requests per windowMs
-    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-    skipFailedRequests: true, // Don't count failed requests
-    keyGenerator: (req) => {
-        return req.ip || req.connection.remoteAddress;
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipFailedRequests: true,
+    keyGenerator: (req) => req.ip || req.connection.remoteAddress,
+    handler: (req, res) => {
+        res.status(429).json({
+            error: '🎀 Too many requests! Please try again in a few minutes! ✨'
+        });
     }
 });
 
 app.use(cors());
-app.use(bodyParser.json());
 app.use(limiter);
 
 // Health check endpoint
@@ -327,9 +340,12 @@ app.use((err, req, res, next) => {
 
 // Webhook handler
 app.post('/telegram-webhook', async (req, res) => {
+  // Set a specific timeout for the webhook endpoint
+  req.setTimeout(25000);
+  
   try {
     console.log('Webhook received:', {
-      body: req.body,
+      body: JSON.stringify(req.body),
       headers: req.headers,
       timestamp: new Date().toISOString()
     });
@@ -339,6 +355,9 @@ app.post('/telegram-webhook', async (req, res) => {
       console.log('No message found in request');
       return res.sendStatus(200);
     }
+
+    // Send an immediate 200 response to Telegram
+    res.sendStatus(200);
 
     const chatId = message.chat.id;
     const text = message.text || '';
@@ -350,66 +369,69 @@ app.post('/telegram-webhook', async (req, res) => {
       timestamp: new Date().toISOString()
     });
 
-    // Check for duplicate messages
-    const messageId = message.message_id;
-    if (processedMessages.has(messageId)) {
-      console.log('Duplicate message detected:', messageId);
-      return res.sendStatus(200);
-    }
-    processedMessages.add(messageId);
+    // Process the message asynchronously
+    setImmediate(async () => {
+      try {
+        // Check for duplicate messages
+        const messageId = message.message_id;
+        if (processedMessages.has(messageId)) {
+          console.log('Duplicate message detected:', messageId);
+          return;
+        }
+        processedMessages.add(messageId);
 
-    // Get or create user session
-    let userSession;
-    try {
-      userSession = await getUserSession(chatId);
-      console.log('User session retrieved:', {
-        chatId,
-        session: userSession,
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error('Session error:', {
-        error: error.message,
-        stack: error.stack,
-        chatId,
-        timestamp: new Date().toISOString()
-      });
-      
-      if (error.message.includes('Airtable tables not found')) {
-        await sendTelegramMessage(chatId, "✨ Hi there! I'm Keyly, your friendly property assistant! I'm just getting my workspace ready for you. Give me a moment to set things up! 🎀");
-      } else {
-        await sendTelegramMessage(chatId, "🌟 Oopsie! Having a little hiccup connecting. Let me fix that for you real quick! ✨");
+        // Get or create user session
+        let userSession;
+        try {
+          userSession = await getUserSession(chatId);
+          console.log('User session retrieved:', {
+            chatId,
+            session: userSession,
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error('Session error:', {
+            error: error.message,
+            stack: error.stack,
+            chatId,
+            timestamp: new Date().toISOString()
+          });
+          
+          if (error.message.includes('Airtable tables not found')) {
+            await sendTelegramMessage(chatId, "✨ Hi there! I'm Keyly, your friendly property assistant! I'm just getting my workspace ready for you. Give me a moment to set things up! 🎀");
+          } else {
+            await sendTelegramMessage(chatId, "🌟 Oopsie! Having a little hiccup connecting. Let me fix that for you real quick! ✨");
+          }
+          return;
+        }
+
+        // Process the message
+        await processMessage(chatId, text, userSession, message);
+        console.log('Message processed successfully:', {
+          chatId,
+          messageId,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        console.error('Processing error:', {
+          error: error.message,
+          stack: error.stack,
+          chatId: message.chat.id,
+          messageId: message.message_id,
+          timestamp: new Date().toISOString()
+        });
+        await sendTelegramMessage(message.chat.id, '🎈 Oh no! Something went a bit wonky. Let\'s try that again, shall we? 🌈');
       }
-      return res.sendStatus(200);
-    }
-
-    // Process the message
-    try {
-      await processMessage(chatId, text, userSession, message);
-      console.log('Message processed successfully:', {
-        chatId,
-        messageId,
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error('Processing error:', {
-        error: error.message,
-        stack: error.stack,
-        chatId,
-        messageId,
-        timestamp: new Date().toISOString()
-      });
-      await sendTelegramMessage(chatId, '🎈 Oh no! Something went a bit wonky. Let\'s try that again, shall we? 🌈');
-    }
-    
-    return res.sendStatus(200);
+    });
   } catch (error) {
     console.error('Webhook error:', {
       error: error.message,
       stack: error.stack,
       timestamp: new Date().toISOString()
     });
-    return res.sendStatus(500);
+    if (!res.headersSent) {
+      res.sendStatus(500);
+    }
   }
 });
 
