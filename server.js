@@ -25,10 +25,20 @@ const requiredEnvVars = [
   'CLOUDINARY_API_SECRET'
 ];
 
-for (const envVar of requiredEnvVars) {
-  if (!process.env[envVar]) {
-    throw new Error(`Missing required environment variable: ${envVar}`);
-  }
+// Load environment variables from .env file if it exists
+if (require('fs').existsSync('.env')) {
+  require('dotenv').config();
+}
+
+// Check for missing environment variables
+const missingVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+if (missingVars.length > 0) {
+  console.error('❌ Missing required environment variables:');
+  missingVars.forEach(envVar => {
+    console.error(`   - ${envVar}`);
+  });
+  console.error('\nPlease check your .env file and ensure all required variables are set.');
+  process.exit(1);
 }
 
 // Initialize OpenAI client
@@ -51,21 +61,32 @@ const upload = multer({
   }
 });
 
-// Rate limiting
+// Trust proxy for rate limiting
+app.set('trust proxy', 1);
+
+// Configure rate limiter
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    skipFailedRequests: true, // Don't count failed requests
+    keyGenerator: (req) => {
+        return req.ip || req.connection.remoteAddress;
+    }
 });
 
-// Middleware
 app.use(cors());
 app.use(bodyParser.json());
-app.use('/telegram-webhook', limiter);
+app.use(limiter);
 
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Telegram AI Property Bot is running' });
 });
+
+// Add message deduplication
+const processedMessages = new Set();
 
 // Helper function to send Telegram messages with retry
 async function sendTelegramMessage(chatId, text, maxRetries = 3) {
@@ -107,7 +128,7 @@ async function handlePDF(document) {
     return pdfData.text;
   } catch (error) {
     console.error('Error processing PDF:', error);
-    throw new Error('Failed to process PDF');
+    throw new Error('✨ Oopsie! I had a bit of trouble reading that PDF. Could you try sending it again? 📄');
   }
 }
 
@@ -134,7 +155,7 @@ async function handleVoiceNote(voice) {
     return whisperResponse.text;
   } catch (error) {
     console.error('Error processing voice note:', error);
-    throw new Error('Failed to process voice note');
+    throw new Error('🎀 Oh dear! I had trouble understanding that voice note. Could you try recording it again? 🎤');
   }
 }
 
@@ -194,163 +215,199 @@ async function handleImage(photos, propertyId = null) {
     };
   } catch (error) {
     console.error('Error processing image:', error);
-    throw new Error('Failed to process image');
+    throw new Error('🌈 Oops! Something went wrong with that photo. Could you try sending it again? 📸');
   }
 }
 
-// Telegram webhook endpoint with improved error handling
-app.post('/telegram-webhook', upload.single('document'), async (req, res) => {
-  try {
-    const message = req.body.message;
-    if (!message) {
-      console.error('No message in request body');
-      return res.sendStatus(400);
+// Process messages with friendly, bubbly responses
+async function processMessage(chatId, text, userSession, message) {
+    const currentState = userSession.Current_State || 'initial';
+    const collectedData = JSON.parse(userSession.Collected_Data || '{}');
+
+    switch (currentState) {
+        case 'initial':
+            await sendTelegramMessage(chatId, "✨ Hi there! I'm Keyly, your friendly property assistant! 🏠\n\nLet's add your amazing property to our collection! First, could you share the property's address with me? 🌟");
+            await updateUserSession(chatId, 'awaiting_address', collectedData, text);
+            break;
+
+        case 'awaiting_address':
+            collectedData.address = text;
+            await sendTelegramMessage(chatId, "🎀 Perfect! That's a lovely location! Now, could you tell me the ZIP code? 📮");
+            await updateUserSession(chatId, 'awaiting_zip', collectedData, text);
+            break;
+
+        case 'awaiting_zip':
+            collectedData.zip = text;
+            await sendTelegramMessage(chatId, "🌈 Great! Now, how many bedrooms does this charming property have? 🛏️");
+            await updateUserSession(chatId, 'awaiting_bedrooms', collectedData, text);
+            break;
+
+        case 'awaiting_bedrooms':
+            collectedData.bedrooms = parseInt(text);
+            await sendTelegramMessage(chatId, "🎭 Wonderful! And how many bathrooms are there? 🚿");
+            await updateUserSession(chatId, 'awaiting_bathrooms', collectedData, text);
+            break;
+
+        case 'awaiting_bathrooms':
+            collectedData.bathrooms = parseInt(text);
+            await sendTelegramMessage(chatId, "🌺 Fantastic! Could you tell me the size in square meters? 📏");
+            await updateUserSession(chatId, 'awaiting_size', collectedData, text);
+            break;
+
+        case 'awaiting_size':
+            collectedData.size = parseInt(text);
+            await sendTelegramMessage(chatId, "✨ Amazing! What's the price for this lovely property? 💖");
+            await updateUserSession(chatId, 'awaiting_price', collectedData, text);
+            break;
+
+        case 'awaiting_price':
+            collectedData.price = parseInt(text);
+            await sendTelegramMessage(chatId, "🎪 Brilliant! Now, tell me about any special amenities or features that make this property unique! ✨");
+            await updateUserSession(chatId, 'awaiting_amenities', collectedData, text);
+            break;
+
+        case 'awaiting_amenities':
+            collectedData.amenities = text;
+            const summary = `🌟 Here's a summary of this wonderful property:
+
+🏠 Address: ${collectedData.address}
+📮 ZIP: ${collectedData.zip}
+🛏️ Bedrooms: ${collectedData.bedrooms}
+🚿 Bathrooms: ${collectedData.bathrooms}
+📏 Size: ${collectedData.size} sqm
+💖 Price: ${collectedData.price}
+✨ Amenities: ${collectedData.amenities}
+
+Is this all correct? Please reply with 'yes' to confirm or 'no' to start over! 🎀`;
+            await sendTelegramMessage(chatId, summary);
+            await updateUserSession(chatId, 'awaiting_confirmation', collectedData, text);
+            break;
+
+        case 'awaiting_confirmation':
+            if (text.toLowerCase() === 'yes') {
+                await sendTelegramMessage(chatId, "🎉 Yay! Now, let's add some beautiful photos of the property! Send me the images one by one, and type 'done' when you're finished! 📸");
+                await updateUserSession(chatId, 'awaiting_images', collectedData, text);
+            } else {
+                await sendTelegramMessage(chatId, "🌸 No problem at all! Let's start fresh! What's the address of the property? 🏠");
+                await updateUserSession(chatId, 'awaiting_address', {}, text);
+            }
+            break;
+
+        case 'awaiting_images':
+            if (text.toLowerCase() === 'done') {
+                await addProperty({
+                    telegramId: chatId.toString(),
+                    ...collectedData
+                });
+                await sendTelegramMessage(chatId, "🎊 Wonderful! I've saved all the details of your amazing property! Need to add another one? Just let me know! 🌟");
+                await updateUserSession(chatId, 'initial', {}, text);
+            } else if (message && message.photo) {
+                const result = await handleImage(message.photo, chatId);
+                collectedData.imageUrl = collectedData.imageUrl || [];
+                collectedData.imageUrl.push(result.imageUrl);
+                await sendTelegramMessage(chatId, "🌈 Beautiful photo! Send more or type 'done' when you're finished! 📸");
+                await updateUserSession(chatId, 'awaiting_images', collectedData, text);
+            } else {
+                await sendTelegramMessage(chatId, "🎀 Please send me photos of the property, or type 'done' if you're finished! 📸");
+            }
+            break;
+
+        default:
+            await sendTelegramMessage(chatId, "✨ Hi! I'm Keyly, your friendly property assistant! Let's start fresh! What's the address of the property you'd like to add? 🏠");
+            await updateUserSession(chatId, 'awaiting_address', {}, text);
+            break;
     }
-
-    const chatId = message.chat.id;
-    const userText = message.text || '';
-
-    // Handle different message types
-    if (message.photo) {
-      let session = await getUserSession(chatId);
-      let collectedData = session ? JSON.parse(session['Collected Data']) : {};
-      let currentState = session ? session['Current State'] : null;
-
-      if (currentState === 'awaiting_images' && collectedData.propertyId) {
-        const processedContent = await handleImage(message.photo, collectedData.propertyId);
-        await sendTelegramMessage(chatId, `📸 Image added successfully! You can send more images or type "done" when finished.`);
-        return res.sendStatus(200);
-      } else {
-        const processedContent = await handleImage(message.photo);
-        await sendTelegramMessage(chatId, `📸 Here's what I found in the image:\n${processedContent.analysis}`);
-        return res.sendStatus(200);
-      }
-    } else if (message.document && message.document.mime_type === 'application/pdf') {
-      const processedContent = await handlePDF(message.document);
-      await sendTelegramMessage(chatId, `🗃️ Here's what I found in the PDF:\n${processedContent}`);
-      return res.sendStatus(200);
-    } else if (message.voice) {
-      const processedContent = await handleVoiceNote(message.voice);
-      await sendTelegramMessage(chatId, `🎙️ Here's what you said:\n${processedContent}`);
-      return res.sendStatus(200);
-    }
-
-    // Handle text messages with session management
-    let session = await getUserSession(chatId);
-    let collectedData = session ? JSON.parse(session['Collected Data']) : {};
-    let currentState = session ? session['Current State'] : null;
-    let botReply = '';
-
-    // Handle confirmation responses
-    if (currentState === 'awaiting_confirmation') {
-      if (userText.toLowerCase() === 'yes') {
-        if (!collectedData.address || !collectedData.zip) {
-          throw new Error('Missing required property data');
-        }
-
-        const propertyId = `PROP-${Date.now()}`;
-        await addProperty({
-          ...collectedData,
-          propertyId
-        });
-        
-        collectedData.propertyId = propertyId;
-        currentState = 'awaiting_images';
-        botReply = '✅ Great! Your property has been saved.\n\n' +
-                  '📸 Now you can send me photos of the property.\n' +
-                  'Send as many photos as you want, and type "done" when finished.';
-      } else if (userText.toLowerCase() === 'no') {
-        collectedData = {};
-        currentState = null;
-        botReply = '🔄 Let\'s start over. What\'s the property address?';
-      } else {
-        botReply = 'Please respond with Yes or No.';
-      }
-    } else if (currentState === 'awaiting_images') {
-      if (userText.toLowerCase() === 'done') {
-        collectedData = {};
-        currentState = null;
-        botReply = '✨ Perfect! All your property information and images have been saved. What would you like to do next?';
-      } else {
-        botReply = '📸 Send me photos of the property, or type "done" when finished.';
-      }
-    } else {
-      // Handle property data collection
-      if (!collectedData.address) {
-        botReply = '🏠 What\'s the property address?';
-        currentState = 'awaiting_address';
-      } else if (!collectedData.zip) {
-        collectedData.address = userText;
-        botReply = '📍 What\'s the ZIP code?';
-        currentState = 'awaiting_zip';
-      } else if (!collectedData.bedrooms) {
-        collectedData.zip = userText;
-        botReply = '🛏️ How many bedrooms?';
-        currentState = 'awaiting_bedrooms';
-      } else if (!collectedData.bathrooms) {
-        collectedData.bedrooms = userText;
-        botReply = '🚿 How many bathrooms?';
-        currentState = 'awaiting_bathrooms';
-      } else if (!collectedData.squareMeters) {
-        collectedData.bathrooms = userText;
-        botReply = '📏 What\'s the total square meters?';
-        currentState = 'awaiting_square_meters';
-      } else if (!collectedData.price) {
-        collectedData.squareMeters = userText;
-        botReply = '💰 What\'s the asking price?';
-        currentState = 'awaiting_price';
-      } else if (!collectedData.description) {
-        collectedData.price = userText;
-        botReply = '📝 Any additional details about the property?';
-        currentState = 'awaiting_description';
-      } else {
-        collectedData.description = userText;
-        botReply = `Here's what I've collected:\n\n` +
-                  `🏠 Address: ${collectedData.address}\n` +
-                  `📍 ZIP: ${collectedData.zip}\n` +
-                  `🛏️ Bedrooms: ${collectedData.bedrooms}\n` +
-                  `🚿 Bathrooms: ${collectedData.bathrooms}\n` +
-                  `📏 Square Meters: ${collectedData.squareMeters}\n` +
-                  `💰 Price: ${collectedData.price}\n` +
-                  `📝 Description: ${collectedData.description}\n\n` +
-                  `Is this information correct? [Yes/No]`;
-        currentState = 'awaiting_confirmation';
-      }
-    }
-
-    // Update session
-    await updateUserSession(chatId, currentState, collectedData, botReply);
-
-    // Send response
-    await sendTelegramMessage(chatId, botReply);
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('Error processing webhook:', error);
-    try {
-      await sendTelegramMessage(chatId, '❌ Sorry, something went wrong. Please try again later.');
-    } catch (sendError) {
-      console.error('Error sending error message:', sendError);
-    }
-    res.sendStatus(500);
-  }
-});
+}
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+    console.error('Error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+});
+
+// Webhook handler
+app.post('/telegram-webhook', async (req, res) => {
+    try {
+        const update = req.body;
+        if (!update || !update.message) {
+            console.log('Invalid update received:', update);
+            return res.sendStatus(200);
+        }
+
+        const message = update.message;
+        const chatId = message.chat.id;
+        const text = message.text || '';
+        const messageId = message.message_id;
+
+        // Check if we've already processed this message
+        const messageKey = `${chatId}-${messageId}`;
+        if (processedMessages.has(messageKey)) {
+            console.log('Duplicate message detected, skipping:', messageKey);
+            return res.sendStatus(200);
+        }
+        processedMessages.add(messageKey);
+
+        // Clean up old message IDs (keep last 1000)
+        if (processedMessages.size > 1000) {
+            const oldestKey = Array.from(processedMessages)[0];
+            processedMessages.delete(oldestKey);
+        }
+
+        console.log('Received message:', { chatId, text });
+
+        // Get or create user session
+        let userSession;
+        try {
+            userSession = await getUserSession(chatId);
+        } catch (error) {
+            console.error('Error getting user session:', error);
+            if (error.message.includes('Airtable tables not found')) {
+                await sendTelegramMessage(chatId, "✨ Hi there! I'm Keyly, your friendly property assistant! I'm just getting my workspace ready for you. Give me a moment to set things up! 🎀");
+            } else {
+                await sendTelegramMessage(chatId, "🌟 Oopsie! Having a little hiccup connecting. Let me fix that for you real quick! ✨");
+            }
+            return;
+        }
+
+        // Process the message
+        try {
+            await processMessage(chatId, text, userSession, message);
+            res.sendStatus(200);
+        } catch (error) {
+            console.error('Error processing message:', error);
+            await sendTelegramMessage(chatId, '🎈 Oh no! Something went a bit wonky. Let\'s try that again, shall we? 🌈');
+            res.sendStatus(500);
+        }
+    } catch (error) {
+        console.error('Error processing webhook:', error);
+        if (chatId) {
+            try {
+                await sendTelegramMessage(chatId, "🌸 Whoopsie! I got a bit tangled up there. Let's start fresh in a moment! 🌺");
+            } catch (sendError) {
+                console.error('Error sending error message:', sendError);
+            }
+        }
+        res.status(500).json({ error: '🎀 Oopsie! Something went a bit wrong. Let\'s try that again! ✨' });
+    }
 });
 
 // Start server with port fallback
 const startServer = (portToTry) => {
-  app.listen(portToTry, () => {
-    console.log(`Server is running on port ${portToTry}`);
+  if (portToTry > 65535) {
+    console.error('❌ No available ports found. Please free up some ports or specify a different port in your .env file.');
+    process.exit(1);
+  }
+
+  const server = app.listen(portToTry, () => {
+    console.log(`✅ Server is running on port ${portToTry}`);
   }).on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.log(`Port ${portToTry} is busy, trying ${portToTry + 1}`);
+      console.log(`⚠️ Port ${portToTry} is busy, trying ${portToTry + 1}`);
+      server.close();
       startServer(portToTry + 1);
     } else {
-      console.error('Server error:', err);
+      console.error('❌ Server error:', err);
+      process.exit(1);
     }
   });
 };

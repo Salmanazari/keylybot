@@ -1,13 +1,24 @@
 require('dotenv').config();
 const Airtable = require('airtable');
 
+// Validate required environment variables
+if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
+  throw new Error('Missing required environment variables: AIRTABLE_API_KEY or AIRTABLE_BASE_ID');
+}
+
 const base = new Airtable({ 
-    apiKey: 'pat8gejo6xwqaZXGE.d3c61e0d572e64f88fd24a26d0876f725a5ec469c11a1f9b66f4f3ae9c306f89' 
-}).base('TelegramAIProperties');
+    apiKey: process.env.AIRTABLE_API_KEY
+}).base(process.env.AIRTABLE_BASE_ID);
+
+// Table names
+const TABLES = {
+    PROPERTIES: 'Properties',
+    SESSIONS: 'User Sessions'
+};
 
 // Properties table functions
-const propertiesTable = base('Properties');
-const sessionsTable = base('User Sessions');
+const propertiesTable = base(TABLES.PROPERTIES);
+const sessionsTable = base(TABLES.SESSIONS);
 
 // Add property to Airtable
 async function addProperty(propertyData) {
@@ -15,16 +26,23 @@ async function addProperty(propertyData) {
         const record = await propertiesTable.create([
             {
                 fields: {
-                    'Timestamp': new Date().toISOString(),
+                    'Telegram_ID': propertyData.telegramId,
+                    'User_Name': propertyData.userName,
+                    'Property_Type': propertyData.propertyType,
                     'Address': propertyData.address,
                     'ZIP': propertyData.zip,
+                    'Size_sqm': propertyData.size,
                     'Bedrooms': propertyData.bedrooms,
                     'Bathrooms': propertyData.bathrooms,
-                    'Square Meters': propertyData.squareMeters,
                     'Price': propertyData.price,
-                    'Description': propertyData.description,
-                    'Property ID': propertyData.propertyId,
-                    'Image URLs': propertyData.imageUrls || []
+                    'Amenities': propertyData.amenities,
+                    'Image_URL': propertyData.imageUrl,
+                    'SEO_Meta_Title': propertyData.seoTitle,
+                    'SEO_Meta_Desc': propertyData.seoDesc,
+                    'SEO_URL_Slug': propertyData.seoSlug,
+                    'SEO_Keywords': propertyData.seoKeywords,
+                    'Created_At': new Date().toISOString(),
+                    'Updated_At': new Date().toISOString()
                 }
             }
         ]);
@@ -36,37 +54,52 @@ async function addProperty(propertyData) {
 }
 
 // Get or create user session
-async function getUserSession(chatId) {
+async function getUserSession(telegramId) {
     try {
-        const records = await sessionsTable.select({
-            filterByFormula: `{Telegram_ID} = '${chatId}'`
-        }).firstPage();
+        console.log('Looking for session with Telegram ID:', telegramId);
+        console.log('Using Airtable base ID:', process.env.AIRTABLE_BASE_ID);
+        
+        // Try to get existing session
+        try {
+            const records = await base(TABLES.SESSIONS)
+                .select({
+                    filterByFormula: `{Telegram_ID} = '${telegramId}'`,
+                    maxRecords: 1
+                })
+                .firstPage();
 
-        if (records.length > 0) {
-            return {
-                id: records[0].id,
-                ...records[0].fields
-            };
+            if (records && records.length > 0) {
+                console.log('Found existing session:', records[0].fields);
+                return records[0].fields;
+            }
+        } catch (error) {
+            console.error('Error accessing sessions table:', error);
+            if (error.error === 'NOT_FOUND') {
+                console.log('Creating sessions table...');
+                throw new Error('Airtable tables not found. Please create the tables manually in your Airtable base.');
+            }
+            throw error;
         }
 
-        const newSession = await sessionsTable.create([
+        console.log('No existing session found, creating new one');
+        // If no session exists, create a new one
+        const newSession = await base(TABLES.SESSIONS).create([
             {
                 fields: {
-                    'Telegram_ID': chatId.toString(),
-                    'Current_State': 'START',
-                    'Collected_Data_JSON': '{}',
+                    'Telegram_ID': telegramId,
+                    'Current_State': 'initial',
+                    'Collected_Data': JSON.stringify({}),
                     'Last_Message': '',
+                    'Created_At': new Date().toISOString(),
                     'Last_Updated': new Date().toISOString()
                 }
             }
         ]);
 
-        return {
-            id: newSession[0].id,
-            ...newSession[0].fields
-        };
+        console.log('Created new session:', newSession[0].fields);
+        return newSession[0].fields;
     } catch (error) {
-        console.error('Error getting user session:', error);
+        console.error('Error in getUserSession:', error);
         throw error;
     }
 }
@@ -79,11 +112,11 @@ async function updateUserSession(telegramId, currentState, collectedData, lastMe
         }).firstPage();
 
         const sessionData = {
-            Telegram_ID: telegramId.toString(),
-            Current_State: currentState,
-            Collected_Data_JSON: JSON.stringify(collectedData),
-            Last_Message: lastMessage,
-            Last_Updated: new Date().toISOString(),
+            'Telegram_ID': telegramId.toString(),
+            'Current_State': currentState,
+            'Collected_Data': JSON.stringify(collectedData),
+            'Last_Message': lastMessage,
+            'Last_Updated': new Date().toISOString()
         };
 
         if (records.length > 0) {

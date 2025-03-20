@@ -1,164 +1,75 @@
-# Telegram AI Property Bot
+# Keyly - Telegram AI Property Bot
 
-A Telegram bot that helps collect and analyze property information using AI. The bot can process text messages, images, PDFs, and voice notes to extract property details and store them in Google Sheets.
+A friendly, AI-powered Telegram bot that helps collect and manage property information with a bubbly personality! 🏠✨
 
 ## Features
 
-- Property data collection with guided conversation
-- Image analysis using GPT-4 Vision
-- PDF document processing
-- Voice note transcription using Whisper
-- Data storage in Google Sheets
-- Cloudinary image storage
-- Session management for multi-step conversations
-- Rate limiting and error handling
-
-## Prerequisites
-
-- Node.js (v14 or higher)
-- Telegram Bot Token
-- OpenAI API Key
-- Cloudinary Account
-- Google Cloud Project with Sheets API enabled
-- Google Sheets Spreadsheet
+- 🏡 Property Information Collection
+- 📸 Image Processing & Analysis
+- 🗣️ Voice Note Transcription
+- 📄 PDF Document Processing
+- 🔄 Airtable Integration
+- ☁️ Cloudinary Image Storage
+- 🤖 OpenAI GPT-4 Vision Integration
 
 ## Environment Variables
 
-Create a `.env` file in the root directory with the following variables:
+Create a `.env` file with the following variables:
 
-```plaintext
-# Telegram Bot Token
-TELEGRAM_TOKEN=your_telegram_bot_token
-
-# OpenAI API Key
+```env
+TELEGRAM_TOKEN=your_telegram_token
+PORT=3001
 OPENAI_API_KEY=your_openai_api_key
-
-# Cloudinary Configuration
-CLOUDINARY_CLOUD_NAME=your_cloud_name
-CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
-
-# Google Sheets Configuration
-GOOGLE_SHEETS_CREDENTIALS=path/to/your/credentials.json
-GOOGLE_SHEETS_ID=your_spreadsheet_id
+CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
+CLOUDINARY_API_KEY=your_cloudinary_api_key
+CLOUDINARY_API_SECRET=your_cloudinary_api_secret
+AIRTABLE_API_KEY=your_airtable_api_key
+AIRTABLE_BASE_ID=your_airtable_base_id
 ```
 
 ## Setup
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/telegram-ai-property-bot.git
-   cd telegram-ai-property-bot
-   ```
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Create `.env` file with required variables
+4. Set up Airtable base with required tables
+5. Run the bot: `npm run dev`
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+## Airtable Setup
 
-3. Set up Google Cloud Project:
-   - Create a new project in Google Cloud Console
-   - Enable Google Sheets API
-   - Create service account credentials
-   - Download the credentials JSON file
-   - Create a Google Spreadsheet and share it with the service account email
-   - Add the spreadsheet ID to your environment variables
+Create two tables in your Airtable base:
 
-4. Set up Cloudinary:
-   - Create a Cloudinary account
-   - Get your cloud name, API key, and API secret
-   - Add them to your environment variables
+### Properties Table
+- Telegram_ID (Single line text)
+- User_Name (Single line text)
+- Property_Type (Single line text)
+- Address (Single line text)
+- ZIP (Single line text)
+- Size_sqm (Number)
+- Bedrooms (Number)
+- Bathrooms (Number)
+- Price (Number)
+- Amenities (Long text)
+- Image_URL (Single line text)
+- SEO_Meta_Title (Single line text)
+- SEO_Meta_Desc (Long text)
+- SEO_URL_Slug (Single line text)
+- SEO_Keywords (Long text)
+- Created_At (Date)
+- Updated_At (Date)
 
-5. Set up Telegram Bot:
-   - Create a new bot with @BotFather
-   - Get the bot token
-   - Add it to your environment variables
+### User Sessions Table
+- Telegram_ID (Single line text)
+- Current_State (Single line text)
+- Collected_Data (Long text)
+- Last_Message (Single line text)
+- Created_At (Date)
+- Last_Updated (Date)
 
-6. Set up OpenAI:
-   - Get an API key from OpenAI
-   - Add it to your environment variables
+## Deployment
 
-## Google Sheets Structure
-
-The bot uses two sheets in your Google Spreadsheet:
-
-1. **Properties Sheet**:
-   - Timestamp
-   - Address
-   - ZIP
-   - Bedrooms
-   - Bathrooms
-   - Square Meters
-   - Price
-   - Description
-   - Property ID
-   - Image URLs
-
-2. **Sessions Sheet**:
-   - Chat ID
-   - Current State
-   - Collected Data (JSON)
-   - Last Update Timestamp
-
-## Usage
-
-1. Start the server:
-   ```bash
-   npm start
-   ```
-
-2. For development with auto-reload:
-   ```bash
-   npm run dev
-   ```
-
-3. Set up your Telegram webhook:
-   ```
-   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_SERVER_URL>/telegram-webhook
-   ```
-
-4. Start chatting with your bot in Telegram!
-
-## Conversation Flow
-
-1. Bot asks for property address
-2. Bot asks for ZIP code
-3. Bot asks for number of bedrooms
-4. Bot asks for number of bathrooms
-5. Bot asks for square meters
-6. Bot asks for price
-7. Bot asks for additional details
-8. Bot shows summary and asks for confirmation
-9. If confirmed, bot asks for property images
-10. User can send multiple images
-11. User types "done" when finished
-
-## Error Handling
-
-The bot includes comprehensive error handling:
-- Rate limiting (100 requests per 15 minutes)
-- Retry logic for external API calls
-- Session timeout (30 minutes)
-- Input validation
-- Error messages to users
-- Detailed error logging
-
-## Security
-
-- Environment variables for sensitive data
-- Rate limiting to prevent abuse
-- Input validation and sanitization
-- Secure file handling
-- Session management
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+This bot is configured for deployment on Vercel. Simply connect your GitHub repository to Vercel and add the environment variables in the Vercel dashboard.
 
 ## License
 
-This project is licensed under the ISC License. 
+MIT 
