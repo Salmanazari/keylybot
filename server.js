@@ -48,6 +48,15 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
+// Validate Cloudinary configuration
+if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+  console.error('❌ Missing required Cloudinary environment variables:');
+  if (!process.env.CLOUDINARY_CLOUD_NAME) console.error('   - CLOUDINARY_CLOUD_NAME');
+  if (!process.env.CLOUDINARY_API_KEY) console.error('   - CLOUDINARY_API_KEY');
+  if (!process.env.CLOUDINARY_API_SECRET) console.error('   - CLOUDINARY_API_SECRET');
+  throw new Error('Missing required Cloudinary environment variables');
+}
+
 // Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
