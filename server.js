@@ -327,79 +327,114 @@ app.use((err, req, res, next) => {
 
 // Webhook handler
 app.post('/telegram-webhook', async (req, res) => {
-    try {
-        const update = req.body;
-        if (!update || !update.message) {
-            console.log('Invalid update received:', update);
-            return res.sendStatus(200);
-        }
-
-        const message = update.message;
-        const chatId = message.chat.id;
-        const text = message.text || '';
-        const messageId = message.message_id;
-
-        // Check if we've already processed this message
-        const messageKey = `${chatId}-${messageId}`;
-        if (processedMessages.has(messageKey)) {
-            console.log('Duplicate message detected, skipping:', messageKey);
-            return res.sendStatus(200);
-        }
-        processedMessages.add(messageKey);
-
-        // Clean up old message IDs (keep last 1000)
-        if (processedMessages.size > 1000) {
-            const oldestKey = Array.from(processedMessages)[0];
-            processedMessages.delete(oldestKey);
-        }
-
-        console.log('Received message:', { chatId, text });
-
-        // Get or create user session
-        let userSession;
-        try {
-            userSession = await getUserSession(chatId);
-        } catch (error) {
-            console.error('Error getting user session:', error);
-            if (error.message.includes('Airtable tables not found')) {
-                await sendTelegramMessage(chatId, "✨ Hi there! I'm Keyly, your friendly property assistant! I'm just getting my workspace ready for you. Give me a moment to set things up! 🎀");
-            } else {
-                await sendTelegramMessage(chatId, "🌟 Oopsie! Having a little hiccup connecting. Let me fix that for you real quick! ✨");
-            }
-            return;
-        }
-
-        // Process the message
-        try {
-            await processMessage(chatId, text, userSession, message);
-            res.sendStatus(200);
-        } catch (error) {
-            console.error('Error processing message:', error);
-            await sendTelegramMessage(chatId, '🎈 Oh no! Something went a bit wonky. Let\'s try that again, shall we? 🌈');
-            res.sendStatus(500);
-        }
-    } catch (error) {
-        console.error('Error processing webhook:', error);
-        if (chatId) {
-            try {
-                await sendTelegramMessage(chatId, "🌸 Whoopsie! I got a bit tangled up there. Let's start fresh in a moment! 🌺");
-            } catch (sendError) {
-                console.error('Error sending error message:', sendError);
-            }
-        }
-        res.status(500).json({ error: '🎀 Oopsie! Something went a bit wrong. Let\'s try that again! ✨' });
+  try {
+    console.log('Webhook received:', {
+      body: req.body,
+      headers: req.headers,
+      timestamp: new Date().toISOString()
+    });
+    
+    const message = req.body.message || req.body.edited_message;
+    if (!message) {
+      console.log('No message found in request');
+      return res.sendStatus(200);
     }
+
+    const chatId = message.chat.id;
+    const text = message.text || '';
+    
+    console.log('Processing message:', {
+      chatId,
+      text,
+      messageId: message.message_id,
+      timestamp: new Date().toISOString()
+    });
+
+    // Check for duplicate messages
+    const messageId = message.message_id;
+    if (processedMessages.has(messageId)) {
+      console.log('Duplicate message detected:', messageId);
+      return res.sendStatus(200);
+    }
+    processedMessages.add(messageId);
+
+    // Get or create user session
+    let userSession;
+    try {
+      userSession = await getUserSession(chatId);
+      console.log('User session retrieved:', {
+        chatId,
+        session: userSession,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Session error:', {
+        error: error.message,
+        stack: error.stack,
+        chatId,
+        timestamp: new Date().toISOString()
+      });
+      
+      if (error.message.includes('Airtable tables not found')) {
+        await sendTelegramMessage(chatId, "✨ Hi there! I'm Keyly, your friendly property assistant! I'm just getting my workspace ready for you. Give me a moment to set things up! 🎀");
+      } else {
+        await sendTelegramMessage(chatId, "🌟 Oopsie! Having a little hiccup connecting. Let me fix that for you real quick! ✨");
+      }
+      return res.sendStatus(200);
+    }
+
+    // Process the message
+    try {
+      await processMessage(chatId, text, userSession, message);
+      console.log('Message processed successfully:', {
+        chatId,
+        messageId,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Processing error:', {
+        error: error.message,
+        stack: error.stack,
+        chatId,
+        messageId,
+        timestamp: new Date().toISOString()
+      });
+      await sendTelegramMessage(chatId, '🎈 Oh no! Something went a bit wonky. Let\'s try that again, shall we? 🌈');
+    }
+    
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error('Webhook error:', {
+      error: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+    return res.sendStatus(500);
+  }
 });
 
-// Start server with port fallback
+// Start server with improved logging
 const startServer = (portToTry) => {
   if (portToTry > 65535) {
-    console.error('❌ No available ports found. Please free up some ports or specify a different port in your .env file.');
+    console.error('❌ No available ports found.');
     process.exit(1);
   }
 
   const server = app.listen(portToTry, () => {
-    console.log(`✅ Server is running on port ${portToTry}`);
+    console.log('✅ Server started:', {
+      port: portToTry,
+      env: process.env.NODE_ENV,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Log environment check
+    console.log('Environment check:', {
+      telegram: !!process.env.TELEGRAM_TOKEN,
+      openai: !!process.env.OPENAI_API_KEY,
+      cloudinary: !!process.env.CLOUDINARY_CLOUD_NAME,
+      airtable: !!process.env.AIRTABLE_API_KEY,
+      timestamp: new Date().toISOString()
+    });
   }).on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.log(`⚠️ Port ${portToTry} is busy, trying ${portToTry + 1}`);

@@ -6,6 +6,10 @@ if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
   throw new Error('Missing required environment variables: AIRTABLE_API_KEY or AIRTABLE_BASE_ID');
 }
 
+// Configure Airtable with retries
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 second
+
 const base = new Airtable({ 
     apiKey: process.env.AIRTABLE_API_KEY
 }).base(process.env.AIRTABLE_BASE_ID);
@@ -16,6 +20,23 @@ const TABLES = {
     SESSIONS: 'User Sessions'
 };
 
+// Retry function
+async function withRetry(fn, maxRetries = MAX_RETRIES) {
+    let lastError;
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            lastError = error;
+            console.error(`Attempt ${i + 1} failed:`, error);
+            if (i < maxRetries - 1) {
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (i + 1)));
+            }
+        }
+    }
+    throw lastError;
+}
+
 // Properties table functions
 const propertiesTable = base(TABLES.PROPERTIES);
 const sessionsTable = base(TABLES.SESSIONS);
@@ -23,32 +44,50 @@ const sessionsTable = base(TABLES.SESSIONS);
 // Add property to Airtable
 async function addProperty(propertyData) {
     try {
-        const record = await propertiesTable.create([
-            {
-                fields: {
-                    'Telegram_ID': propertyData.telegramId,
-                    'User_Name': propertyData.userName,
-                    'Property_Type': propertyData.propertyType,
-                    'Address': propertyData.address,
-                    'ZIP': propertyData.zip,
-                    'Size_sqm': propertyData.size,
-                    'Bedrooms': propertyData.bedrooms,
-                    'Bathrooms': propertyData.bathrooms,
-                    'Price': propertyData.price,
-                    'Amenities': propertyData.amenities,
-                    'Image_URL': propertyData.imageUrl,
-                    'SEO_Meta_Title': propertyData.seoTitle,
-                    'SEO_Meta_Desc': propertyData.seoDesc,
-                    'SEO_URL_Slug': propertyData.seoSlug,
-                    'SEO_Keywords': propertyData.seoKeywords,
-                    'Created_At': new Date().toISOString(),
-                    'Updated_At': new Date().toISOString()
+        console.log('Adding property:', {
+            telegramId: propertyData.telegramId,
+            timestamp: new Date().toISOString()
+        });
+
+        const record = await withRetry(async () => {
+            const result = await propertiesTable.create([
+                {
+                    fields: {
+                        'Telegram_ID': propertyData.telegramId,
+                        'User_Name': propertyData.userName,
+                        'Property_Type': propertyData.propertyType,
+                        'Address': propertyData.address,
+                        'ZIP': propertyData.zip,
+                        'Size_sqm': propertyData.size,
+                        'Bedrooms': propertyData.bedrooms,
+                        'Bathrooms': propertyData.bathrooms,
+                        'Price': propertyData.price,
+                        'Amenities': propertyData.amenities,
+                        'Image_URL': propertyData.imageUrl,
+                        'SEO_Meta_Title': propertyData.seoTitle,
+                        'SEO_Meta_Desc': propertyData.seoDesc,
+                        'SEO_URL_Slug': propertyData.seoSlug,
+                        'SEO_Keywords': propertyData.seoKeywords,
+                        'Created_At': new Date().toISOString(),
+                        'Updated_At': new Date().toISOString()
+                    }
                 }
-            }
-        ]);
-        return record[0];
+            ]);
+            return result[0];
+        });
+
+        console.log('Property added successfully:', {
+            recordId: record.id,
+            timestamp: new Date().toISOString()
+        });
+
+        return record;
     } catch (error) {
-        console.error('Error adding property:', error);
+        console.error('Error adding property:', {
+            error: error.message,
+            stack: error.stack,
+            timestamp: new Date().toISOString()
+        });
         throw error;
     }
 }
@@ -56,50 +95,74 @@ async function addProperty(propertyData) {
 // Get or create user session
 async function getUserSession(telegramId) {
     try {
-        console.log('Looking for session with Telegram ID:', telegramId);
-        console.log('Using Airtable base ID:', process.env.AIRTABLE_BASE_ID);
+        console.log('Looking for session:', {
+            telegramId,
+            baseId: process.env.AIRTABLE_BASE_ID,
+            timestamp: new Date().toISOString()
+        });
         
         // Try to get existing session
-        try {
-            const records = await base(TABLES.SESSIONS)
-                .select({
-                    filterByFormula: `{Telegram_ID} = '${telegramId}'`,
-                    maxRecords: 1
-                })
-                .firstPage();
+        const records = await withRetry(async () => {
+            try {
+                return await base(TABLES.SESSIONS)
+                    .select({
+                        filterByFormula: `{Telegram_ID} = '${telegramId}'`,
+                        maxRecords: 1
+                    })
+                    .firstPage();
+            } catch (error) {
+                if (error.error === 'NOT_FOUND') {
+                    console.log('Table not found, throwing error');
+                    throw new Error('Airtable tables not found. Please create the tables manually in your Airtable base.');
+                }
+                throw error;
+            }
+        });
 
-            if (records && records.length > 0) {
-                console.log('Found existing session:', records[0].fields);
-                return records[0].fields;
-            }
-        } catch (error) {
-            console.error('Error accessing sessions table:', error);
-            if (error.error === 'NOT_FOUND') {
-                console.log('Creating sessions table...');
-                throw new Error('Airtable tables not found. Please create the tables manually in your Airtable base.');
-            }
-            throw error;
+        if (records && records.length > 0) {
+            console.log('Found existing session:', {
+                telegramId,
+                sessionId: records[0].id,
+                timestamp: new Date().toISOString()
+            });
+            return records[0].fields;
         }
 
-        console.log('No existing session found, creating new one');
-        // If no session exists, create a new one
-        const newSession = await base(TABLES.SESSIONS).create([
-            {
-                fields: {
-                    'Telegram_ID': telegramId,
-                    'Current_State': 'initial',
-                    'Collected_Data': JSON.stringify({}),
-                    'Last_Message': '',
-                    'Created_At': new Date().toISOString(),
-                    'Last_Updated': new Date().toISOString()
-                }
-            }
-        ]);
+        console.log('Creating new session:', {
+            telegramId,
+            timestamp: new Date().toISOString()
+        });
 
-        console.log('Created new session:', newSession[0].fields);
+        // If no session exists, create a new one
+        const newSession = await withRetry(async () => {
+            return await base(TABLES.SESSIONS).create([
+                {
+                    fields: {
+                        'Telegram_ID': telegramId,
+                        'Current_State': 'initial',
+                        'Collected_Data': JSON.stringify({}),
+                        'Last_Message': '',
+                        'Created_At': new Date().toISOString(),
+                        'Last_Updated': new Date().toISOString()
+                    }
+                }
+            ]);
+        });
+
+        console.log('New session created:', {
+            telegramId,
+            sessionId: newSession[0].id,
+            timestamp: new Date().toISOString()
+        });
+
         return newSession[0].fields;
     } catch (error) {
-        console.error('Error in getUserSession:', error);
+        console.error('Session error:', {
+            error: error.message,
+            stack: error.stack,
+            telegramId,
+            timestamp: new Date().toISOString()
+        });
         throw error;
     }
 }
@@ -107,9 +170,17 @@ async function getUserSession(telegramId) {
 // Update user session
 async function updateUserSession(telegramId, currentState, collectedData, lastMessage) {
     try {
-        const records = await sessionsTable.select({
-            filterByFormula: `{Telegram_ID} = '${telegramId}'`,
-        }).firstPage();
+        console.log('Updating session:', {
+            telegramId,
+            currentState,
+            timestamp: new Date().toISOString()
+        });
+
+        const records = await withRetry(async () => {
+            return await sessionsTable.select({
+                filterByFormula: `{Telegram_ID} = '${telegramId}'`,
+            }).firstPage();
+        });
 
         const sessionData = {
             'Telegram_ID': telegramId.toString(),
@@ -120,12 +191,31 @@ async function updateUserSession(telegramId, currentState, collectedData, lastMe
         };
 
         if (records.length > 0) {
-            await sessionsTable.update(records[0].id, sessionData);
+            await withRetry(async () => {
+                await sessionsTable.update(records[0].id, sessionData);
+            });
+            console.log('Session updated:', {
+                telegramId,
+                sessionId: records[0].id,
+                timestamp: new Date().toISOString()
+            });
         } else {
-            await sessionsTable.create(sessionData);
+            const newRecord = await withRetry(async () => {
+                return await sessionsTable.create(sessionData);
+            });
+            console.log('New session created during update:', {
+                telegramId,
+                sessionId: newRecord.id,
+                timestamp: new Date().toISOString()
+            });
         }
     } catch (error) {
-        console.error('Error updating user session:', error);
+        console.error('Update error:', {
+            error: error.message,
+            stack: error.stack,
+            telegramId,
+            timestamp: new Date().toISOString()
+        });
         throw error;
     }
 }
