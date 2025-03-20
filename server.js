@@ -10,9 +10,8 @@ const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
 const cloudinary = require('cloudinary').v2;
-const { google } = require('googleapis');
 const rateLimit = require('express-rate-limit');
-const { getUserSession, updateUserSession, appendToSheet } = require('./googleSheets');
+const { getUserSession, updateUserSession, addProperty } = require('./airtableConfig');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -23,9 +22,7 @@ const requiredEnvVars = [
   'OPENAI_API_KEY',
   'CLOUDINARY_CLOUD_NAME',
   'CLOUDINARY_API_KEY',
-  'CLOUDINARY_API_SECRET',
-  'GOOGLE_SHEETS_CREDENTIALS',
-  'GOOGLE_SHEETS_ID'
+  'CLOUDINARY_API_SECRET'
 ];
 
 for (const envVar of requiredEnvVars) {
@@ -45,15 +42,6 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
-
-// Configure Google Sheets
-const auth = new google.auth.GoogleAuth({
-  keyFile: process.env.GOOGLE_SHEETS_CREDENTIALS,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
-
-const sheets = google.sheets({ version: 'v4', auth });
-const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_ID;
 
 // Configure multer for file uploads
 const upload = multer({ 
@@ -138,12 +126,12 @@ async function handleVoiceNote(voice) {
       timeout: 30000 // 30 second timeout
     });
     
-    const whisperResponse = await openai.createTranscription(
-      response.data,
-      'whisper-1'
-    );
+    const whisperResponse = await openai.audio.transcriptions.create({
+      file: response.data,
+      model: "whisper-1"
+    });
     
-    return whisperResponse.data.text;
+    return whisperResponse.text;
   } catch (error) {
     console.error('Error processing voice note:', error);
     throw new Error('Failed to process voice note');
@@ -176,12 +164,10 @@ async function handleImage(photos, propertyId = null) {
     );
 
     if (propertyId) {
-      await appendToSheet([
-        new Date().toISOString(),
+      await addProperty({
         propertyId,
-        uploadResponse.secure_url,
-        'image'
-      ], 'Properties');
+        imageUrls: [uploadResponse.secure_url]
+      });
     }
 
     const visionResponse = await openai.chat.completions.create({
@@ -227,8 +213,8 @@ app.post('/telegram-webhook', upload.single('document'), async (req, res) => {
     // Handle different message types
     if (message.photo) {
       let session = await getUserSession(chatId);
-      let collectedData = session ? JSON.parse(session[2]) : {};
-      let currentState = session ? session[1] : null;
+      let collectedData = session ? JSON.parse(session['Collected Data']) : {};
+      let currentState = session ? session['Current State'] : null;
 
       if (currentState === 'awaiting_images' && collectedData.propertyId) {
         const processedContent = await handleImage(message.photo, collectedData.propertyId);
@@ -251,31 +237,23 @@ app.post('/telegram-webhook', upload.single('document'), async (req, res) => {
 
     // Handle text messages with session management
     let session = await getUserSession(chatId);
-    let collectedData = session ? JSON.parse(session[2]) : {};
-    let currentState = session ? session[1] : null;
+    let collectedData = session ? JSON.parse(session['Collected Data']) : {};
+    let currentState = session ? session['Current State'] : null;
     let botReply = '';
 
     // Handle confirmation responses
     if (currentState === 'awaiting_confirmation') {
       if (userText.toLowerCase() === 'yes') {
-        if (!collectedData.Address || !collectedData.ZIP) {
+        if (!collectedData.address || !collectedData.zip) {
           throw new Error('Missing required property data');
         }
 
-        const rowData = [
-          new Date().toISOString(),
-          collectedData.Address,
-          collectedData.ZIP,
-          collectedData.Bedrooms,
-          collectedData.Bathrooms || '',
-          collectedData.SquareMeters || '',
-          collectedData.Price || '',
-          collectedData.Description || '',
-          userText
-        ];
-        const response = await appendToSheet(rowData);
-        
         const propertyId = `PROP-${Date.now()}`;
+        await addProperty({
+          ...collectedData,
+          propertyId
+        });
+        
         collectedData.propertyId = propertyId;
         currentState = 'awaiting_images';
         botReply = '✅ Great! Your property has been saved.\n\n' +
@@ -298,43 +276,43 @@ app.post('/telegram-webhook', upload.single('document'), async (req, res) => {
       }
     } else {
       // Handle property data collection
-      if (!collectedData.Address) {
+      if (!collectedData.address) {
         botReply = '🏠 What\'s the property address?';
         currentState = 'awaiting_address';
-      } else if (!collectedData.ZIP) {
-        collectedData.Address = userText;
+      } else if (!collectedData.zip) {
+        collectedData.address = userText;
         botReply = '📍 What\'s the ZIP code?';
-        currentState = 'awaiting_ZIP';
-      } else if (!collectedData.Bedrooms) {
-        collectedData.ZIP = userText;
+        currentState = 'awaiting_zip';
+      } else if (!collectedData.bedrooms) {
+        collectedData.zip = userText;
         botReply = '🛏️ How many bedrooms?';
         currentState = 'awaiting_bedrooms';
-      } else if (!collectedData.Bathrooms) {
-        collectedData.Bedrooms = userText;
+      } else if (!collectedData.bathrooms) {
+        collectedData.bedrooms = userText;
         botReply = '🚿 How many bathrooms?';
         currentState = 'awaiting_bathrooms';
-      } else if (!collectedData.SquareMeters) {
-        collectedData.Bathrooms = userText;
+      } else if (!collectedData.squareMeters) {
+        collectedData.bathrooms = userText;
         botReply = '📏 What\'s the total square meters?';
         currentState = 'awaiting_square_meters';
-      } else if (!collectedData.Price) {
-        collectedData.SquareMeters = userText;
+      } else if (!collectedData.price) {
+        collectedData.squareMeters = userText;
         botReply = '💰 What\'s the asking price?';
         currentState = 'awaiting_price';
-      } else if (!collectedData.Description) {
-        collectedData.Price = userText;
+      } else if (!collectedData.description) {
+        collectedData.price = userText;
         botReply = '📝 Any additional details about the property?';
         currentState = 'awaiting_description';
       } else {
-        collectedData.Description = userText;
+        collectedData.description = userText;
         botReply = `Here's what I've collected:\n\n` +
-                  `🏠 Address: ${collectedData.Address}\n` +
-                  `📍 ZIP: ${collectedData.ZIP}\n` +
-                  `🛏️ Bedrooms: ${collectedData.Bedrooms}\n` +
-                  `🚿 Bathrooms: ${collectedData.Bathrooms}\n` +
-                  `📏 Square Meters: ${collectedData.SquareMeters}\n` +
-                  `💰 Price: ${collectedData.Price}\n` +
-                  `📝 Description: ${collectedData.Description}\n\n` +
+                  `🏠 Address: ${collectedData.address}\n` +
+                  `📍 ZIP: ${collectedData.zip}\n` +
+                  `🛏️ Bedrooms: ${collectedData.bedrooms}\n` +
+                  `🚿 Bathrooms: ${collectedData.bathrooms}\n` +
+                  `📏 Square Meters: ${collectedData.squareMeters}\n` +
+                  `💰 Price: ${collectedData.price}\n` +
+                  `📝 Description: ${collectedData.description}\n\n` +
                   `Is this information correct? [Yes/No]`;
         currentState = 'awaiting_confirmation';
       }
